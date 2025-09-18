@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../utils/api';
 import './Dashboard.css';
 import logoImg from '../assets/img1.png';
 
 function Dashboard({ user }) {
-  const [showChatDrawer, setShowChatDrawer] = useState(false);
+  const [showSQLDrawer, setShowSQLDrawer] = useState(false);
+  // Drag/resize state for the movable SQL drawer
+  const [dragEnabled, setDragEnabled] = useState(false); // toggled by double-click
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [drawerPos, setDrawerPos] = useState({ right: 0, top: 0 });
+  const [drawerSize, setDrawerSize] = useState({ width: 480, height: window.innerHeight });
+  const dragRef = useRef({ startX: 0, startY: 0, startRight: 0, startTop: 0, startWidth: 0, startHeight: 0 });
   // Chat drawer placeholder state
   const [chatMessages, setChatMessages] = useState([
     { sender: 'bot', text: 'Hi! I am your database assistant. Ask me anything about your data.' }
@@ -27,6 +35,10 @@ function Dashboard({ user }) {
         { sender: 'bot', text: 'This is a placeholder. LLM integration coming soon!' }
       ]);
     }, 700);
+  };
+  const focusChat = () => {
+    const el = document.getElementById('mainChatInput');
+    if (el) el.focus();
   };
   const [naturalLanguageInput, setNaturalLanguageInput] = useState('');
   const [generatedSQL, setGeneratedSQL] = useState('-- Your generated SQL will appear here\nSELECT * FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY);');
@@ -272,6 +284,26 @@ LIMIT 100;`,
       });
   };
 
+  const handleSaveSQL = () => {
+    try {
+      const existing = JSON.parse(localStorage.getItem('savedQueries') || '[]');
+      const entry = { sql: generatedSQL, explanation, createdAt: new Date().toISOString() };
+      existing.unshift(entry);
+      localStorage.setItem('savedQueries', JSON.stringify(existing.slice(0, 50)));
+      showNotification('Query saved locally', 'success');
+    } catch (e) {
+      showNotification('Failed to save query', 'error');
+    }
+  };
+
+  const handleFormatSQL = () => {
+    // Very simple formatting: add newlines before common clauses and collapse multiple spaces
+    let formatted = generatedSQL.replace(/\s+/g, ' ');
+    formatted = formatted.replace(/\s+(FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|ON|HAVING)\s+/ig, '\n$1 ');
+    setGeneratedSQL(formatted);
+    showNotification('SQL formatted', 'success');
+  };
+
   const handleConnectDatabase = () => {
     setShowDbModal(true);
   };
@@ -413,6 +445,52 @@ LIMIT 100;`,
     }
   };
 
+  // Initialize drawer position/size and global pointer handlers for drag/resize
+  useEffect(() => {
+    // center the drawer vertically by default
+    setDrawerPos({ right: 0, top: 0 });
+    setDrawerSize({ width: 480, height: window.innerHeight });
+
+    const onPointerMove = (e) => {
+      if (isDragging) {
+        const dx = e.clientX - dragRef.current.startX;
+        const dy = e.clientY - dragRef.current.startY;
+        // moving horizontally will change the 'right' offset
+        const newRight = Math.max(0, dragRef.current.startRight - dx);
+        const newTop = Math.max(0, dragRef.current.startTop + dy);
+        setDrawerPos(pos => ({ ...pos, right: newRight, top: Math.min(Math.max(newTop, 0), window.innerHeight - 120) }));
+      }
+      if (isResizing) {
+        const dx = e.clientX - dragRef.current.startX;
+        const dy = e.clientY - dragRef.current.startY;
+        const newWidth = Math.max(300, dragRef.current.startWidth - dx); // resizing by dragging left/right; invert dx
+        const newHeight = Math.max(200, dragRef.current.startHeight + dy);
+        setDrawerSize(sz => ({ ...sz, width: Math.min(newWidth, window.innerWidth - 100), height: Math.min(newHeight, window.innerHeight - 40) }));
+      }
+    };
+
+    const onPointerUp = (e) => {
+      if (isDragging) setIsDragging(false);
+      if (isResizing) setIsResizing(false);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    const onResize = () => {
+      setDrawerSize(sz => ({ ...sz, height: window.innerHeight }));
+      setDrawerPos(pos => ({ ...pos, top: Math.min(pos.top, Math.max(0, window.innerHeight - 120)) }));
+    };
+
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [isDragging, isResizing]);
+
   return (
     <div className="dashboard">
       {/* Sidebar */}
@@ -472,47 +550,17 @@ LIMIT 100;`,
       </div>
 
       {/* Main Content */}
-      <div className="main-content">
-        {/* Header */}
-  <header className="header">
+      <div className="main-content chat-fullscreen">
+        <header className="header">
           <div className="header-left">
-            <h1>SQL Query Generator</h1>
-            <p>Convert natural language to SQL queries with AI</p>
+            <h1>Database Chat</h1>
+            <p>Ask questions about your data — chat is the primary interface.</p>
           </div>
           <div className="header-right">
-            <button className="btn btn-primary chat-btn" onClick={() => setShowChatDrawer(true)}>
-              <i className="fas fa-comments"></i>
-              Chat with DB
+            <button className="btn btn-secondary" onClick={() => setShowSQLDrawer(true)}>
+              <i className="fas fa-database"></i>
+              SQL Generator
             </button>
-      {/* Chat Drawer */}
-      <div className={`chat-drawer${showChatDrawer ? ' open' : ''}`}>
-        <div className="chat-drawer-header">
-          <span><i className="fas fa-robot"></i> Database Chat Assistant</span>
-          <button className="close-chat" onClick={() => setShowChatDrawer(false)} title="Close">
-            <i className="fas fa-times"></i>
-          </button>
-        </div>
-        <div className="chat-drawer-body">
-          <div className="chat-messages">
-            {chatMessages.map((msg, idx) => (
-              <div key={idx} className={`chat-msg ${msg.sender}`}>{msg.text}</div>
-            ))}
-          </div>
-        </div>
-        <form className="chat-drawer-footer" onSubmit={handleSendChat} autoComplete="off">
-          <input
-            type="text"
-            className="chat-input"
-            placeholder="Ask about your data..."
-            value={chatInput}
-            onChange={e => setChatInput(e.target.value)}
-            autoFocus={showChatDrawer}
-          />
-          <button type="submit" className="btn btn-primary chat-send" disabled={!chatInput.trim()}>
-            <i className="fas fa-paper-plane"></i>
-          </button>
-        </form>
-      </div>
             <button className="btn btn-secondary" onClick={handleConnectDatabase}>
               <i className="fas fa-plug"></i>
               Connect Database
@@ -524,163 +572,213 @@ LIMIT 100;`,
           </div>
         </header>
 
-        {/* Query Generator Section */}
-        <section className="query-generator">
-          <div className="input-section">
-            <div className="input-container">
-              <label htmlFor="naturalLanguageInput">Describe what you want to query:</label>
-              <div className="input-wrapper">
-                <textarea
-                  id="naturalLanguageInput"
-                  value={naturalLanguageInput}
-                  onChange={(e) => setNaturalLanguageInput(e.target.value)}
-                  placeholder="e.g., Show me all customers who made purchases in the last 30 days"
-                  rows="3"
-                />
-                <button className="btn btn-primary" onClick={handleGenerateSQL} disabled={loading}>
-                  <i className="fas fa-magic"></i>
-                  {loading ? 'Generating...' : 'Generate SQL'}
-                </button>
-              </div>
-            </div>
+        {/* Fullscreen Chatbox */}
+        <div className="chat-main fullscreen">
+          <div className="chat-messages-main">
+            {chatMessages.map((msg, idx) => (
+              <div key={idx} className={`chat-msg ${msg.sender}`}>{msg.text}</div>
+            ))}
+          </div>
+          <form className="chat-footer-main" onSubmit={handleSendChat} autoComplete="off">
+            <input
+              id="mainChatInput"
+              type="text"
+              className="chat-input-main"
+              placeholder="Ask about your data..."
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              autoFocus
+            />
+            <button type="submit" className="btn btn-primary chat-send-main" disabled={!chatInput.trim()}>
+              <i className="fas fa-paper-plane"></i>
+            </button>
+          </form>
+        </div>
+      </div>
 
-            <div className="quick-examples">
-              <span className="examples-label">Quick Examples:</span>
-              <div className="example-tags">
-                {quickExamples.map((example, index) => (
-                  <button
-                    key={index}
-                    className="example-tag"
-                    onClick={() => handleExampleClick(example.text)}
-                  >
-                    {example.display}
-                  </button>
-                ))}
-              </div>
+      {/* SQL Drawer (sliding window) */}
+      <div
+        className={`sql-drawer${showSQLDrawer ? ' open' : ''} ${dragEnabled ? 'drag-enabled' : ''} ${isFullscreen ? ' fullscreen' : ''}`}
+        style={{
+          right: showSQLDrawer ? `${drawerPos.right}px` : `-9999px`,
+          top: `${drawerPos.top}px`,
+          width: `${drawerSize.width}px`,
+          height: `${drawerSize.height}px`,
+        }}
+      >
+        <div
+          className="sql-drawer-header"
+          onDoubleClick={() => setDragEnabled(prev => !prev)}
+          onPointerDown={(e) => {
+            // start dragging only when dragEnabled and left button
+            if (!dragEnabled) return;
+            if (e.button !== 0) return;
+            setIsDragging(true);
+            dragRef.current.startX = e.clientX;
+            dragRef.current.startY = e.clientY;
+            dragRef.current.startRight = drawerPos.right;
+            dragRef.current.startTop = drawerPos.top;
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h2 style={{ margin: 0 }}>SQL Query Generator</h2>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setIsFullscreen(prev => {
+                  const next = !prev;
+                  if (next) setDragEnabled(false);
+                  return next;
+                });
+              }}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            >
+              <i className={`fas ${isFullscreen ? 'fa-compress' : 'fa-expand'}`}></i>
+            </button>
+          </div>
+          <div style={{ marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="close-sql"
+              onPointerDown={(e) => { e.stopPropagation(); }}
+              onClick={() => { setShowSQLDrawer(false); setIsFullscreen(false); }}
+              title="Close"
+            >
+              <i className="fas fa-times"></i>
+            </button>
+          </div>
+        </div>
+        <div className="sql-drawer-body">
+          <div className="quick-examples">
+            <span className="examples-label">Examples:</span>
+            {quickExamples.map((ex, i) => (
+              <button key={i} className="example-tag" onClick={() => handleExampleClick(ex.text)}>{ex.display}</button>
+            ))}
+          </div>
+          {/* Reuse existing generator UI inside drawer */}
+          <div className="input-container">
+            <label htmlFor="naturalLanguageInput">Describe what you want to query:</label>
+            <div className="input-wrapper">
+              <textarea
+                id="naturalLanguageInput"
+                value={naturalLanguageInput}
+                onChange={(e) => setNaturalLanguageInput(e.target.value)}
+                placeholder="e.g., Show me all customers who made purchases in the last 30 days"
+                rows="4"
+              />
+              <button className="btn btn-primary" onClick={handleGenerateSQL} disabled={loading}>
+                <i className="fas fa-magic"></i>
+                {loading ? 'Generating...' : 'Generate SQL'}
+              </button>
             </div>
           </div>
 
-          {/* Results Section */}
-          <div className="results-section">
-            <div className="result-tabs">
-              <button
-                className={`tab-btn ${activeTab === 'sql' ? 'active' : ''}`}
-                onClick={() => setActiveTab('sql')}
-              >
-                Generated SQL
-              </button>
-              <button
-                className={`tab-btn ${activeTab === 'results' ? 'active' : ''}`}
-                onClick={() => setActiveTab('results')}
-              >
-                Query Results
-              </button>
-              <button
-                className={`tab-btn ${activeTab === 'explanation' ? 'active' : ''}`}
-                onClick={() => setActiveTab('explanation')}
-              >
-                Explanation
-              </button>
-            </div>
+          <div className="result-tabs">
+            <button className={`tab-btn ${activeTab === 'sql' ? 'active' : ''}`} onClick={() => setActiveTab('sql')}>Generated SQL</button>
+            <button className={`tab-btn ${activeTab === 'results' ? 'active' : ''}`} onClick={() => setActiveTab('results')}>Query Results</button>
+            <button className={`tab-btn ${activeTab === 'explanation' ? 'active' : ''}`} onClick={() => setActiveTab('explanation')}>Explanation</button>
+          </div>
 
-            <div className="tab-content">
-              {/* SQL Tab */}
-              {activeTab === 'sql' && (
-                <div className="tab-pane active">
-                  <div className="sql-editor">
-                    <div className="editor-header">
-                      <span className="editor-title">SQL Query</span>
-                      <div className="editor-actions">
-                        <button className="btn btn-sm" onClick={handleCopySQL} title="Copy to clipboard">
-                          <i className="fas fa-copy"></i>
-                        </button>
-                        <button className="btn btn-sm" title="Save query">
-                          <i className="fas fa-save"></i>
-                        </button>
-                        <button className="btn btn-sm" title="Format SQL">
-                          <i className="fas fa-code"></i>
-                        </button>
-                      </div>
-                    </div>
-                    <div className="code-editor">
-                      <pre><code className="sql-code">{generatedSQL}</code></pre>
-                    </div>
-                    <div className="editor-footer">
+          <div className="tab-content">
+            {activeTab === 'sql' && (
+              <div className="sql-view">
+                <div className="sql-editor">
+                  <div className="editor-header">
+                    <div className="editor-title">Generated SQL</div>
+                    <div className="editor-actions">
+                      <span className="query-info">Estimated rows: {estimatedRows}</span>
                       <button className="btn btn-success" onClick={handleExecuteQuery} disabled={!dbConnection || loading}>
                         <i className="fas fa-play"></i>
-                        {loading ? 'Executing...' : 'Execute Query'}
+                        {loading ? 'Executing...' : 'Execute'}
                       </button>
-                      <span className="query-info">
-                        <i className="fas fa-info-circle"></i>
-                        Estimated rows: <span>{estimatedRows}</span>
-                      </span>
+                      <button className="btn btn-sm" onClick={handleCopySQL} title="Copy to clipboard">
+                        <i className="fas fa-copy"></i>
+                      </button>
+                      <button className="btn btn-sm" onClick={handleSaveSQL} title="Save query">
+                        <i className="fas fa-save"></i>
+                      </button>
+                      <button className="btn btn-sm" onClick={handleFormatSQL} title="Format SQL">
+                        <i className="fas fa-code"></i>
+                      </button>
                     </div>
                   </div>
+                  <div className="code-editor">
+                    <pre><code className="sql-code">{generatedSQL}</code></pre>
+                  </div>
                 </div>
-              )}
-
-              {/* Results Tab */}
-              {activeTab === 'results' && (
-                <div className="tab-pane active">
-                  <div className="results-container">
-                    <div className="results-header">
-                      <span className="results-title">Query Results</span>
-                      <div className="results-actions">
-                        <button className="btn btn-sm">
-                          <i className="fas fa-download"></i>
-                          Export CSV
-                        </button>
-                        <span className="results-count">Showing <span>{queryResults.length}</span> rows</span>
-                      </div>
-                    </div>
-                    <div className="table-container">
-                      {queryResults.length > 0 ? (
-                        <table className="results-table">
-                          <thead>
-                            <tr>
-                              {Object.keys(queryResults[0]).map(key => (
-                                <th key={key}>{key}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {queryResults.map((row, index) => (
-                              <tr key={index}>
-                                {Object.values(row).map((value, i) => (
-                                  <td key={i}>{String(value)}</td>
-                                ))}
-                              </tr>
+              </div>
+            )}
+            {activeTab === 'results' && (
+              <div className="results-view">
+                <div className="results-header">
+                  <div className="results-title">Query Results</div>
+                  <div className="results-actions">
+                    <div className="results-count">{queryResults.length} rows</div>
+                    <button className="btn btn-sm" onClick={() => { navigator.clipboard.writeText(JSON.stringify(queryResults, null, 2)); showNotification('Results copied', 'success'); }}>
+                      <i className="fas fa-copy"></i>
+                    </button>
+                    <button className="btn btn-sm" onClick={() => { const csv = queryResults.length ? Object.keys(queryResults[0]).join(',') + '\n' + queryResults.map(r => Object.values(r).map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n') : ''; const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'results.csv'; a.click(); URL.revokeObjectURL(url); }}>
+                      <i className="fas fa-file-csv"></i>
+                    </button>
+                  </div>
+                </div>
+                {queryResults.length > 0 ? (
+                  <div className="table-container">
+                    <table className="results-table">
+                      <thead>
+                        <tr>
+                          {Object.keys(queryResults[0]).map(key => (
+                            <th key={key}>{key}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queryResults.map((row, index) => (
+                          <tr key={index}>
+                            {Object.values(row).map((value, i) => (
+                              <td key={i}>{String(value)}</td>
                             ))}
-                          </tbody>
-                        </table>
-                      ) : (
-                        <div className="no-results">
-                          <i className="fas fa-table"></i>
-                          <p>Execute a query to see results</p>
-                        </div>
-                      )}
-                    </div>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              )}
-
-              {/* Explanation Tab */}
-              {activeTab === 'explanation' && (
-                <div className="tab-pane active">
-                  <div className="explanation-container">
-                    <div className="explanation-header">
-                      <i className="fas fa-lightbulb"></i>
-                      <span>Query Explanation</span>
-                    </div>
-                    <div className="explanation-content">
-                      <p>{explanation}</p>
-                    </div>
+                ) : (
+                  <div className="no-results">
+                    <i className="fas fa-table"></i>
+                    <p>Execute a query to see results</p>
                   </div>
+                )}
+              </div>
+            )}
+            {activeTab === 'explanation' && (
+              <div className="explanation-view">
+                <div className="explanation-header">
+                  <h4>Explanation</h4>
                 </div>
-              )}
-            </div>
+                <div className="explanation-content">
+                  <p style={{ whiteSpace: 'pre-wrap' }}>{explanation}</p>
+                </div>
+              </div>
+            )}
           </div>
-        </section>
+        </div>
+        {/* Resizer handle */}
+        <div
+          className="sql-drawer-resizer"
+          onPointerDown={(e) => {
+            // left button only
+            if (e.button !== 0) return;
+            setIsResizing(true);
+            dragRef.current.startX = e.clientX;
+            dragRef.current.startY = e.clientY;
+            dragRef.current.startWidth = drawerSize.width;
+            dragRef.current.startHeight = drawerSize.height;
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+          }}
+        />
       </div>
 
       {/* Loading Overlay */}
